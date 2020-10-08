@@ -7,6 +7,7 @@ attention-based models can identify relavant keywords that are strongly related 
 - RQ3. stop words 제거 
 - RQ4. bilstm attn layer는 bert output 중 token level output에 추가한다. 
 - RQ5. attn_threshold = Percentile((attn_max - att_i), N)
+- RQ6. 사전으로 만들어질 단어가 overlap 되는 것과 overlap 되지 않는 것의 의미 분석 
 
 Reference
 1. Progress notes Classification and Keyword Extraction using Attention based Deep Learning Models with BERT
