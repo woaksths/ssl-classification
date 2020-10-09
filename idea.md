@@ -1,4 +1,4 @@
-Keyword, Key-Phrase extraction
+### Keyword, Key-Phrase extraction
 ```
 attention-based models can identify relavant keywords that are strongly related to the certain catergories
 ```
@@ -8,12 +8,13 @@ attention-based models can identify relavant keywords that are strongly related 
 - RQ4. bilstm attn layer는 bert output 중 token level output에 추가한다. 
 - RQ5. attn_threshold = Percentile((attn_max - att_i), N)
 - RQ6. 사전으로 만들어질 단어가 overlap 되는 것과 overlap 되지 않는 것의 의미 분석 
+- RQ7. 사전을 만들 때, 가중치를 TF-IDF로 주는 방법 고민해보기
 
 Reference
 1. Progress notes Classification and Keyword Extraction using Attention based Deep Learning Models with BERT
 
 
-Mutltask Deep Neural Net 적용(?)
+### Mutltask Deep Neural Net 적용
 1. 학습 데이터셋이 적을 때, Multitask에 대하여 Finetuning 후,
 2. 마지막 레이어만 제외한 뒤, 나머지 모든 레이어(BERT encoder 몸통)를 저장하여 재사용하는 방법
 
@@ -23,7 +24,7 @@ Reference
 3.
 
 
-Semi-supervised Learning
+### Semi-supervised Learning
 1. Pseudo labeling
 2. MixMatch
 3. Virtual Adversarial Training
