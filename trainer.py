@@ -1,8 +1,10 @@
 import torch
+from lexicon_config import *
+from early_stopping import EarlyStopping
 
 class Trainer:
     def __init__(self, config, model, criterion, optimizer,
-                 train_loader, valid_loader, save_path):
+                 train_loader, valid_loader, test_loader, save_path, tokenizer):
         
         self.config = config
         self.model = model
@@ -10,18 +12,45 @@ class Trainer:
 
         self.train_loader = train_loader
         self.valid_loader = valid_loader
-        
+        self.test_loader = test_loader
         self.save_path = save_path
         self.optimizer = optimizer
         self.device = self.config.device
         self.model.to(self.device)
-        
-        
+        self.tokenizer = tokenizer
+        self.lexicon = {0:{}, 1:{}}
+        self.early_stopping = EarlyStopping(patience=5, verbose=True)
+    
+    
     def calcuate_accu(self, big_idx, targets):
         n_correct = (big_idx==targets).sum().item()
         return n_correct
     
+    
+    def extract_lexicon(self, attentions, input_ids, targets):
+        values, indices = torch.topk(attentions, k=5, dim=-1)
+        for input_var, indice, target in zip(input_ids, indices, targets):
+            target = target.item()
+            for idx in indice:
+                vocab_id = input_var[idx.item()].item()
+                word= self.tokenizer._convert_id_to_token(vocab_id)
+                if word in STOP_WORDS or word in END_WORDS or word in CONTRAST or word in NEGATOR:
+                    continue
+                if word in self.lexicon[target]:
+                    self.lexicon[target][word] += 1
+                else:
+                    self.lexicon[target][word] = 1
+                
+    
+    def write_lexicon(self, fname, lexicon):
+        with open(fname, 'w') as fw:
+            for word in lexicon:
+                temp = word + '\t'+ str(lexicon[word]) +'\n'
+                fw.write(temp)
+
+
     def train_epoch(self, epoch):
+        print('#'*50, 'EPOCH {}'.format(epoch),'#'*50)
         tr_loss = 0
         n_correct = 0
         nb_tr_steps = 0
@@ -33,7 +62,10 @@ class Trainer:
             attention_mask = data['attention_mask'].to(self.device, dtype=torch.long)
             token_type_ids = data['token_type_ids'].to(self.device, dtype=torch.long)
             targets = data['labels'].to(self.device, dtype=torch.long)
-            outputs = self.model(ids, attention_mask, token_type_ids)
+            outputs, attn = self.model(ids, attention_mask, token_type_ids)
+            
+            self.extract_lexicon(attn, ids, targets)
+            
             loss = self.criterion(outputs, targets)
             tr_loss += loss.item()
             big_val, big_idx = torch.max(outputs.data, dim=1)
@@ -46,37 +78,60 @@ class Trainer:
                 accu_step = (n_correct*100)/nb_tr_examples 
                 print(f"Training Loss per 1000 steps: {loss_step}")
                 print(f"Training Accuracy per 1000 steps: {accu_step}")
-            
+                
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
-        print(f'The Total Accuracy for Epoch {epoch}: {(n_correct*100)/nb_tr_examples}')
         epoch_loss = tr_loss/nb_tr_steps
         epoch_accu = (n_correct*100)/nb_tr_examples
         print(f"Training Loss Epoch: {epoch_loss}")
         print(f"Training Accuracy Epoch: {epoch_accu}")
+        
+        # 각 epoch에서 생성된 렉시콘 file write
+        pos_lexicon = dict(sorted(self.lexicon[1].items(), key=lambda x:x[1], reverse=True))
+        fname = 'lexicons/pos_lexicon_epoch_{}'.format(epoch)
+        self.write_lexicon(fname, pos_lexicon)
+
+        neg_lexicon = dict(sorted(self.lexicon[0].items(), key=lambda x:x[1], reverse=True))
+        fname = 'lexicons/neg_lexicon_epoch_{}'.format(epoch)
+        self.write_lexicon(fname, neg_lexicon)
+
+        # 렉시콘 초기화 
+        self.lexicon = {0:{}, 1:{}}
         return self.model
+    
     
     def train(self, do_eval=True):
         for epoch in range(self.config.epochs):
             self.train_epoch(epoch)
             self.evaluation()
-    
-    def evaluation(self):
+#             self.evaluation(is_test=True)
+            if epoch % 3 == 0:
+                self.evaluation(is_test=True)
+            print('*'*100)
+            if self.early_stopping.early_stop:
+                print("EARLY STOP")
+                break
+
+
+    def evaluation(self, is_test=False):
         self.model.eval()
         tr_loss = 0
         nb_tr_steps = 0
         nb_tr_examples = 0
         n_correct = 0; n_wrong = 0; total = 0
-        valid_loader = self.valid_loader
+        if is_test == True:
+            data_loader = self.test_loader
+        else:
+            data_loader = self.valid_loader
 
         with torch.no_grad():
-            for _, data in enumerate(valid_loader):
+            for _, data in enumerate(data_loader):
                 ids = data['input_ids'].to(self.device, dtype=torch.long)
                 attention_mask = data['attention_mask'].to(self.device, dtype=torch.long)
                 token_type_ids = data['token_type_ids'].to(self.device, dtype=torch.long)
                 targets = data['labels'].to(self.device, dtype=torch.long)
-                outputs = self.model(ids, attention_mask, token_type_ids)
+                outputs, attn = self.model(ids, attention_mask, token_type_ids)
                 loss = self.criterion(outputs, targets)
                 tr_loss += loss.item()
                 big_val, big_idx = torch.max(outputs.data, dim=1)
@@ -87,13 +142,23 @@ class Trainer:
                 if _ % 1000 == 0:
                     loss_step = tr_loss/nb_tr_steps
                     accu_step = (n_correct*100)/nb_tr_examples
-                    print(f"Validation Loss per 1000 steps: {loss_step}")
-                    print(f"Validation Accuracy per 1000 steps: {accu_step}")
+                    if is_test == True:
+                        print(f"Test Loss per 1000 steps: {loss_step}")
+                        print(f"Test Accuracy per 1000 steps: {accu_step}")
+                    else:
+                        print(f"Validation Loss per 1000 steps: {loss_step}")
+                        print(f"Validation Accuracy per 1000 steps: {accu_step}")
         
         epoch_loss = tr_loss/nb_tr_steps
         epoch_accu = (n_correct*100)/nb_tr_examples
-        print(f"Validation Loss Epoch: {epoch_loss}")
-        print(f"Validation Accuracy Epoch: {epoch_accu}")
+        
+        if is_test == True:
+            print(f"Test Loss Epoch: {epoch_loss}")
+            print(f"Test Accuracy Epoch: {epoch_accu}")
+        else:
+            self.early_stopping(epoch_loss)
+            print(f"Validation Loss Epoch: {epoch_loss}")
+            print(f"Validation Accuracy Epoch: {epoch_accu}")
         return epoch_accu
     
     
