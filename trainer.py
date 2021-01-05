@@ -1,6 +1,8 @@
 import torch
+import os
 from lexicon_config import *
 from early_stopping import EarlyStopping
+
 
 class Trainer:
     def __init__(self, config, model, criterion, optimizer,
@@ -9,17 +11,28 @@ class Trainer:
         self.config = config
         self.model = model
         self.criterion = criterion
-
         self.train_loader = train_loader
         self.valid_loader = valid_loader
         self.test_loader = test_loader
-        self.save_path = save_path
+
+        if not os.path.isabs(save_path):
+            expt_dir = os.path.join(os.getcwd(), save_path)
+        self.expt_dir = expt_dir
+        
+        if not os.path.exists(self.expt_dir):
+            os.makedirs(self.expt_dir)
+        
+        self.lexicon_dir = self.expt_dir + '/lexicons'
+        if not os.path.exists(self.lexicon_dir):
+            os.makedirs(self.lexicon_dir)
+        
         self.optimizer = optimizer
         self.device = self.config.device
         self.model.to(self.device)
         self.tokenizer = tokenizer
         self.lexicon = {0:{}, 1:{}}
         self.early_stopping = EarlyStopping(patience=5, verbose=True)
+        self.best_accuracy = -1
     
     
     def calcuate_accu(self, big_idx, targets):
@@ -89,32 +102,32 @@ class Trainer:
         
         # 각 epoch에서 생성된 렉시콘 file write
         pos_lexicon = dict(sorted(self.lexicon[1].items(), key=lambda x:x[1], reverse=True))
-        fname = 'lexicons/pos_lexicon_epoch_{}'.format(epoch)
+        fname = self.lexicon_dir + '/pos_lexicon_{}'.format(epoch)
         self.write_lexicon(fname, pos_lexicon)
 
         neg_lexicon = dict(sorted(self.lexicon[0].items(), key=lambda x:x[1], reverse=True))
-        fname = 'lexicons/neg_lexicon_epoch_{}'.format(epoch)
+        fname = self.lexicon_dir + '/neg_lexicon_{}'.format(epoch)
         self.write_lexicon(fname, neg_lexicon)
 
         # 렉시콘 초기화 
         self.lexicon = {0:{}, 1:{}}
-        return self.model
+
     
     
     def train(self, do_eval=True):
         for epoch in range(self.config.epochs):
             self.train_epoch(epoch)
-            self.evaluation()
+            self.evaluation(epoch)
 #             self.evaluation(is_test=True)
             if epoch % 3 == 0:
-                self.evaluation(is_test=True)
+                self.evaluation(epoch, is_test=True)
             print('*'*100)
             if self.early_stopping.early_stop:
                 print("EARLY STOP")
                 break
 
 
-    def evaluation(self, is_test=False):
+    def evaluation(self, epoch, is_test=False):
         self.model.eval()
         tr_loss = 0
         nb_tr_steps = 0
@@ -159,12 +172,18 @@ class Trainer:
             self.early_stopping(epoch_loss)
             print(f"Validation Loss Epoch: {epoch_loss}")
             print(f"Validation Accuracy Epoch: {epoch_accu}")
-        return epoch_accu
-    
-    
+            
+            if self.best_accuracy < epoch_accu:
+                self.best_accuracy = epoch_accu
+                self.save_model(epoch)
+
+            
     def save_model(self, epoch):
-        # save vocab file 
-        # save model 
-        # save optimizer 
-        # save epoch, step
-        pass
+        checkpoint = {'epoch':epoch, 'model_state_dict': self.model.state_dict(),
+                      'optimizer_state_dict': self.optimizer.state_dict()}
+        save_path = self.expt_dir+'/checkpoint_{}.pt'.format(epoch)
+        torch.save(checkpoint, save_path)
+        '''
+        ### 만약 model과 optimizer를 load하고 있지 않고 새롭게 initialization 하고 추가된 데이터로 새로 학습을 하면 어떻게 되지?
+        https://tutorials.pytorch.kr/beginner/saving_loading_models.html
+        '''
