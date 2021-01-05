@@ -9,8 +9,8 @@ def read_imdb_split(split_dir):
         for text_file in (split_dir/label_dir).iterdir():
             texts.append(text_file.read_text())
             labels.append(0 if label_dir is "neg" else 1)
-
     return texts, labels
+
 
 class ImdbDataset(torch.utils.data.Dataset):
     def __init__(self, encodings, labels):
