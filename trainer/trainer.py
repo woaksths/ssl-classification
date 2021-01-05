@@ -1,7 +1,8 @@
 import torch
 import os
+import pickle
 from lexicon_config import *
-from early_stopping import EarlyStopping
+from trainer.early_stopping import EarlyStopping
 
 
 class Trainer:
@@ -56,10 +57,8 @@ class Trainer:
                 
     
     def write_lexicon(self, fname, lexicon):
-        with open(fname, 'w') as fw:
-            for word in lexicon:
-                temp = word + '\t'+ str(lexicon[word]) +'\n'
-                fw.write(temp)
+        with open(fname, 'wb') as fw:
+            pickle.dump(lexicon, fw, pickle.HIGHEST_PROTOCOL)
 
 
     def train_epoch(self, epoch):
@@ -101,14 +100,11 @@ class Trainer:
         print(f"Training Accuracy Epoch: {epoch_accu}")
         
         # 각 epoch에서 생성된 렉시콘 file write
-        pos_lexicon = dict(sorted(self.lexicon[1].items(), key=lambda x:x[1], reverse=True))
-        fname = self.lexicon_dir + '/pos_lexicon_{}'.format(epoch)
-        self.write_lexicon(fname, pos_lexicon)
-
-        neg_lexicon = dict(sorted(self.lexicon[0].items(), key=lambda x:x[1], reverse=True))
-        fname = self.lexicon_dir + '/neg_lexicon_{}'.format(epoch)
-        self.write_lexicon(fname, neg_lexicon)
-
+        self.lexicon[1] = dict(sorted(self.lexicon[1].items(), key=lambda x:x[1], reverse=True))
+        self.lexicon[0] = dict(sorted(self.lexicon[0].items(), key=lambda x:x[1], reverse=True))
+        fname = self.lexicon_dir + '/lexicon_{}.pkl'.format(epoch)
+        self.write_lexicon(fname, self.lexicon)
+        
         # 렉시콘 초기화 
         self.lexicon = {0:{}, 1:{}}
 
