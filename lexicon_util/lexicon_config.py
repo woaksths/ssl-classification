@@ -32,7 +32,7 @@ STOP_WORDS = ['i', 'me', 'my', 'myself', 'we', 'our',
 			'few', 'more', 'most', 'other', 'some', 'such', 'no', 
 			'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 
 			'very', 's', 't', 'can', 'will', 'just', 'don', 
-			'should', 'now', '>', 'br', '<']
+			'should', 'now', '>', 'br', '<', '[SEP]']
 
 
 FILTER_WORDS= ['is','was','were','have', 'do', 'are', 'get', 'make', 'got', 'has', 'had','made', 'got', 'i', 'people']
