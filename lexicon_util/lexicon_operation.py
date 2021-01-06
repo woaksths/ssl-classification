@@ -1,6 +1,6 @@
 import pickle
 from augment import *
-
+import copy
 
 class Lexicon(object):
     def __init__(self, epoch=None, top_k = 10, fname=None, class_label = 2):
@@ -12,9 +12,8 @@ class Lexicon(object):
         
     def get_initial_lexicon(self, epoch, class_label):
         start = epoch
-        end = epoch + 3 
+        end = start + 4
         initial_lexicons = {label:{} for label in range(class_label)}
-
         for idx in range(start, end):
             fname = 'experiment/lexicons/lexicon_{}.pkl'.format(idx)
             with open(fname, 'rb') as rf:
@@ -34,7 +33,7 @@ class Lexicon(object):
             initial_lexicons[label] = dict(sorted(initial_lexicons[label].items(), key=lambda x:x[1], reverse=True))
         initial_lexicons = self.filter_lexicon(initial_lexicons)
         return initial_lexicons
-    
+
     
     def filter_lexicon(self, initial_lexicons):
         class_labels = list(initial_lexicons.keys())
@@ -80,3 +79,25 @@ class Lexicon(object):
         return is_validate
 
     
+    def augment_lexicon(self):
+        # augment lexicon using wordnet's syn, ant
+        class_label = list(self.lexicon.keys())
+        origin_lexicon = copy.deepcopy(self.lexicon)
+        
+        # antonym based
+        if len(class_label) == 2:
+            for label in class_label:
+                reverse_label = 1 - label
+                for word in origin_lexicon[label]:
+                    antonyms = get_antonyms(word)
+                    self.lexicon[reverse_label].extend(antonyms)
+        
+        # synonym based
+        for label in class_label:    
+            for word in origin_lexicon[label]:
+                synonyms = get_synonyms(word)
+                self.lexicon[label].extend(synonyms)
+        
+        for label in class_label:
+            self.lexicon[label] = list(set(self.lexicon[label]))
+            
