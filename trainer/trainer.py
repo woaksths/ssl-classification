@@ -1,9 +1,8 @@
 import torch
 import os
 import pickle
-from lexicon_config import *
+from lexicon_util.lexicon_config import *
 from trainer.early_stopping import EarlyStopping
-
 
 class Trainer:
     def __init__(self, config, model, criterion, optimizer,
@@ -34,6 +33,7 @@ class Trainer:
         self.lexicon = {0:{}, 1:{}}
         self.early_stopping = EarlyStopping(patience=5, verbose=True)
         self.best_accuracy = -1
+        self.lowest_val_loss = 987654321
     
     
     def calcuate_accu(self, big_idx, targets):
@@ -115,8 +115,8 @@ class Trainer:
             self.train_epoch(epoch)
             self.evaluation(epoch)
 #             self.evaluation(is_test=True)
-            if epoch % 3 == 0:
-                self.evaluation(epoch, is_test=True)
+#             if epoch % 3 == 0:
+#                 self.evaluation(epoch, is_test=True)
             print('*'*100)
             if self.early_stopping.early_stop:
                 print("EARLY STOP")
@@ -173,12 +173,21 @@ class Trainer:
                 self.best_accuracy = epoch_accu
                 self.save_model(epoch)
 
-            
-    def save_model(self, epoch):
+            if self.lowest_val_loss > epoch_loss:
+                self.lowest_val_loss = epoch_loss
+                self.save_model(epoch, val_loss_lowest=True)
+
+
+    def save_model(self, epoch, val_loss_lowest=False):
         checkpoint = {'epoch':epoch, 'model_state_dict': self.model.state_dict(),
                       'optimizer_state_dict': self.optimizer.state_dict()}
         save_path = self.expt_dir+'/checkpoint_{}.pt'.format(epoch)
         torch.save(checkpoint, save_path)
+        
+        if val_loss_lowest:
+            save_path = self.expt_dir +'/lowest_val_loss.pt'
+            torch.save(checkpoint, save_path)
+            
         '''
         ### 만약 model과 optimizer를 load하고 있지 않고 새롭게 initialization 하고 추가된 데이터로 새로 학습을 하면 어떻게 되지?
         https://tutorials.pytorch.kr/beginner/saving_loading_models.html
