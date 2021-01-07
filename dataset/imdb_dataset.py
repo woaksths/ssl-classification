@@ -1,6 +1,7 @@
 from pathlib import Path
 import torch
 
+
 def read_imdb_split(split_dir):
     split_dir = Path(split_dir)
     texts = []
