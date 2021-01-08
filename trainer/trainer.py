@@ -2,7 +2,7 @@ import torch
 import os
 import pickle
 from lexicon_util.lexicon_config import *
-from trainer.early_stopping import EarlyStopping
+from util.early_stopping import EarlyStopping
 
 class Trainer:
     def __init__(self, config, model, criterion, optimizer,
