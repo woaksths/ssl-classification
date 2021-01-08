@@ -41,16 +41,9 @@ class BERT_LSTM_Classification(torch.nn.Module):
         
         self.mask = attention_mask
         output, (h_n, c_n) = self.lstm(last_hidden_state)
-        '''
-        output : ([16, 512, 768])
-        h_n : ([1, 16, 768])
-        c_n : ([1, 16, 768])
-        '''
         c_t, attn = self.attention(h_n, output)
-#         print('c_t', c_t.size())
         output = torch.nn.ReLU()(c_t)
         output = self.dropout(output)
         output = self.classifier(output)
-#         print('output', output.size())
         return output, attn
     
