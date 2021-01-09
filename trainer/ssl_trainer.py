@@ -1,13 +1,14 @@
 import torch
 import os
 from util.early_stopping import EarlyStopping
-from util.checkpoint import save_model, get_best_checkpoint, load_trained_model
+from util.checkpoint import save_model, get_best_checkpoint, load_trained_model, save_lexicon
 from transformers import BertTokenizer
 from model.bert_classification import BERT_Classification
 from torch.utils.data import Dataset, DataLoader
 from torch import cuda
 import torch.nn as nn 
 import copy
+from lexicon_util.lexicon_config import *
 
 class SSL_Trainer(object):
     
@@ -112,16 +113,35 @@ class SSL_Trainer(object):
                 correct +=1
                 
         return (labeled_encodings, labeled_labels), (correct, total)
+        
     
+    def extract_lexicon(self, attentions, input_ids, targets, lexicon):
+        # attn, ids, targets, lexicon
+        values, indices = torch.topk(attentions, k=5, dim=-1)
+        for input_var, indice, target in zip(input_ids, indices, targets):
+            target = target.item()
+            for idx in indice:
+                vocab_id = input_var[idx.item()].item()
+                word = self.tokenizer._convert_id_to_token(vocab_id)
+                if word in STOP_WORDS or word in END_WORDS or word in CONTRAST or word in NEGATOR:
+                    continue
+                if word in lexicon[target]:
+                    lexicon[target][word] += 1
+                else:
+                    lexicon[target][word] = 1
+        return lexicon
     
     
     def train(self, labeled_data=None, unlabeled_data=None,
               dev_data=None, test_data=None, outer_epoch=20, inner_epoch=20):
         outer_early_stopping = EarlyStopping(patience=5, verbose=True)
-        
+        valid_loader = DataLoader(dev_data, **self.config.valid_params)
+
         ## Outer Loop
         for o_epoch in range(outer_epoch):
             if outer_early_stopping.early_stop:
+                print('EARLY STOPPING!')
+                print('END ...')
                 break
                 
             # init model and load best model 
@@ -158,48 +178,117 @@ class SSL_Trainer(object):
                     consensus_total += total
                     new_labeled_dataset.append(new_labeled_data)
                     
+            print('#'*50, 'OUTER EPOCH {}'.format(o_epoch+1), '#'*50)
             print('INFO correct {} / total {} by only model predict'.format(model_correct, model_total))
             print('INFO consensus correct {} / consensus total {}'.format(consensus_correct, consensus_total))
-            
-            print('#'*100)
             print('UPDATE DATASET')
-            print('LABELED DATA :',len(labeled_data))
             train_dataset = self.update_dataset(new_labeled_dataset, labeled_data)
-            print('TRAINING DATA: ', len(train_dataset))
-            train_loader = DataLoader(train_dataset, **self.config.train_params)
-            
+            print('LABELED DATA :',len(labeled_data))
+            print('TRAINING DATA [AUGMENTED]: ', len(train_dataset))
+                        
             # Inner Loop 
-            '''
-            1. 추가된 학습 데이터를 통해 학습을 진행
-            2. 각 epoch의 배치마다 매번 perturbed samples을 다르게 생성하도록 구현 
-            3. after training all the epoch or early stopping, extract lexicon for the total labeled training dataset. 
-            4. update existing lexicon based on extracted lexicon
-            '''
+            train_loader = DataLoader(train_dataset, **self.config.train_params)
             inner_early_stopping = EarlyStopping(patience=5, verbose=True)
-            model.train()
+            lowest_dev_loss = 987654321 
+            best_accuracy = -1
+            
             for i_epoch in range(inner_epoch):
-                # load labeled dataloader
-                for _, batch in enumerate(labeled_loader):
-                    # forward batch 
-                    # get loss1 
-                    
-                    # gen_perturbed_samples per batch
-                    # get loss2
-
-                    # loss = loss1 + loss2 
-
-                    # best accuracy 혹은 low dev loss 에서의 attention 렉시콘 정보를 기반으로 사전 생성
-                    break
-                    
-                with torch.no_grad():
-                    # evaluation
+                tr_loss = 0
+                n_correct = 0
+                nb_tr_examples = 0
+                nb_tr_steps = 0
+                model.train()
                 
+                # 매 에폭마다 렉시콘을 생성하고, 렉시콘 파일 이름은 outer_epoch으로 구분
+                # 렉시콘 저장은 dev_loss가 가장 낮을 때, lexicon을 저장함 
+                lexicon = {label:{} for label in range(self.config.class_num)}
+                for _, batch in enumerate(train_loader):
+                    # forward batch                     
+                    ids = batch['input_ids'].to(self.device, dtype=torch.long)
+                    attention_mask = batch['attention_mask'].to(self.device, dtype=torch.long)
+                    token_type_ids = batch['token_type_ids'].to(self.device, dtype=torch.long)
+                    targets = batch['labels'].to(self.device, dtype=torch.long)
+                    outputs, attn = model(ids, attention_mask, token_type_ids)
+                    
+                    loss1 = self.criterion(outputs, targets)
+                    lexicon = self.extract_lexicon(attn, ids, targets, lexicon)
+                    
+                    # get loss1 
+                    # gen_perturbed_batch(batch, class_label=2) # class가 binary일 떄는 antonym. else oversampling based on synonym
+                    loss = loss1 # + loss2 from perturbed samples
+                    tr_loss += loss.item()
+                    nb_tr_steps += 1
+                    nb_tr_examples += targets.size(0)
+                    
+                    big_val, big_idx = torch.max(outputs.data, dim=1)
+                    n_correct += self.calculate_accu(big_idx, targets) # calcuate_accu
+                    
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    
+                    del loss, loss1, ids, attention_mask, token_type_ids, targets
+                
+                epoch_loss = tr_loss / nb_tr_steps
+                epoch_accu = (n_correct*100) / nb_tr_examples
+                print('-'*50, 'outer_epoch {} inner_epoch {}'.format(o_epoch+1, i_epoch+1), '-'*50)
+                print('Training Loss {}'.format(epoch_loss))
+                print('Training Accuracy {}'.format(epoch_accu))
+                
+                with torch.no_grad():
+                    model.eval()
+                    dev_loss, dev_acc = self.evaluate(model, valid_loader)
+                    print('Dev Loss ', dev_loss)
+                    print('Dev Accuracy ', dev_acc)
+                    inner_early_stopping(dev_loss)
+                    if lowest_dev_loss > dev_loss:
+                        lowest_dev_loss = dev_loss
+                        save_model(model=model, optimizer=optimizer, epoch=o_epoch+1, path=self.ssl_expt_dir)
+                        
+                        for label in range(self.config.class_num):
+                            lexicon[label] = dict(sorted(lexicon[label].items(), key=lambda x:x[1], reverse=True))
+                            
+                        save_lexicon(lexicon=lexicon, epoch=o_epoch+1, path=self.ssl_expt_dir)
+                        
+            #self.lexicon_instance.lexicon_update()
+            #self.lexicon_instance.augment_lexicon()
                 if inner_early_stopping.early_stop:
+                    print('EARLY STOPPING!')
                     break
-            
-            self.lexicon_instance.lexicon_update()
-            self.lexicon_instance.augment_lexicon()
-            1/0
-            
+                
             del model, optimizer
+            print()
             
+         
+    def calculate_accu(self, big_idx, targets):
+        n_correct = (big_idx==targets).sum().item()
+        return n_correct
+    
+    
+    def evaluate(self, model, data_loader):
+        model.eval()
+        tr_loss = 0
+        n_correct = 0
+        nb_tr_steps = 0
+        nb_tr_examples = 0
+        with torch.no_grad():
+            for _, batch in enumerate(data_loader):
+                ids = batch['input_ids'].to(self.device, dtype=torch.long)
+                attention_mask = batch['attention_mask'].to(self.device, dtype=torch.long)
+                token_type_ids = batch['token_type_ids'].to(self.device, dtype=torch.long)
+                targets = batch['labels'].to(self.device, dtype=torch.long)
+                
+                outputs, attn = model(ids, attention_mask, token_type_ids)
+                loss = self.criterion(outputs, targets)
+                
+                tr_loss += loss.item()
+                big_val, big_idx = torch.max(outputs.data, dim=1)
+                n_correct += self.calculate_accu(big_idx, targets)
+                
+                nb_tr_steps +=1
+                nb_tr_examples += targets.size(0)
+        
+        epoch_loss = tr_loss / nb_tr_steps
+        epoch_accu = (n_correct*100) / nb_tr_examples
+        
+        return epoch_loss, epoch_accu

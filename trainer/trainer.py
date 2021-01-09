@@ -36,7 +36,7 @@ class Trainer:
         self.lowest_val_loss = 987654321
     
     
-    def calcuate_accu(self, big_idx, targets):
+    def calculate_accu(self, big_idx, targets):
         n_correct = (big_idx==targets).sum().item()
         return n_correct
     
@@ -81,7 +81,7 @@ class Trainer:
             loss = self.criterion(outputs, targets)
             tr_loss += loss.item()
             big_val, big_idx = torch.max(outputs.data, dim=1)
-            n_correct += self.calcuate_accu(big_idx, targets)
+            n_correct += self.calculate_accu(big_idx, targets)
             nb_tr_steps += 1
             nb_tr_examples+=targets.size(0)
             
