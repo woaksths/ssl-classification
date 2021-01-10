@@ -7,6 +7,7 @@ class Lexicon(object):
         self.fname = fname
         self.class_label = class_label
         self.top_k = top_k 
+        self.lexicon = {label:[] for label in range(self.class_label)}
         self.lexicon = self.get_initial_lexicon(epoch, class_label)
         
         
@@ -35,23 +36,26 @@ class Lexicon(object):
         return initial_lexicons
 
     
-    def filter_lexicon(self, initial_lexicons):
+    def filter_lexicon(self, initial_lexicons, top_k=30):
+        # remove intersection word and validate lexicon word using synonyms and antonyms set.
         class_labels = list(initial_lexicons.keys())
-        candidate_lexicons = {label:list(initial_lexicons[label])[:self.top_k] for label in class_labels}
+        candidate_lexicons = {label:list(initial_lexicons[label])[:top_k] for label in class_labels}
         filtered_lexicons = {label:[] for label in class_labels}
-
+        
         for label in class_labels:
             for word in candidate_lexicons[label]:
+                if '#' in word or len(word) ==1 :
+                    continue
                 is_valid = True
                 for other_label in class_labels:
                     if other_label == label:
+                        if not self.validate_with_antset(word, initial_lexicons[label]) or not self.validate_with_antset(word, self.lexicon[label]):
+                            is_valid = False
                         continue
-                    if word in initial_lexicons[other_label]:
+                    if word in initial_lexicons[other_label] or word in self.lexicon[other_label]:
                         is_valid = False
-                    if not self.validate_with_synset(word, initial_lexicons[other_label]):
+                    if not self.validate_with_synset(word, initial_lexicons[other_label]) or not self.validate_with_synset(word, self.lexicon[other_label]):
                         is_valid = False
-                if not self.validate_with_antset(word, initial_lexicons[label]):
-                    is_valid = False
                 if is_valid:
                     filtered_lexicons[label].append(word)
         return filtered_lexicons
@@ -100,4 +104,55 @@ class Lexicon(object):
         
         for label in class_label:
             self.lexicon[label] = list(set(self.lexicon[label]))
+     
+    
+    def lexicon_update(self, new_lexicon):
+        '''
+        기존 렉시콘에서 필요없는 단어 삭제 (제거 기준)
+        new lexicon에서 필요한 단어 기존 렉시콘에 추가 (추가 기준) 
+        '''
+        # extract top_k lexicon from new lexicon based attention
+        top_k = 30 
+        top_k_lexicon = {label:[] for label in new_lexicon.keys()}
+        for label in new_lexicon.keys():
+            top_k_list = list(new_lexicon[label])[:top_k]
+            top_k_lexicon[label].extend(top_k_list)
+        
+        # get intersection btw top_k_lexicon
+        intersection = set(top_k_lexicon[0])
+        for label in range(1, self.class_label):
+            intersection = intersection & set(top_k_lexicon[label])
+        
+        # remove intersection in top_k_lexicon
+        for label in range(self.class_label):
+            for common_word in intersection:
+                top_k_lexicon[label].remove(common_word)
+        
+        # remove word in existing lexicon that didn't appear in new_lexicon(attn)
+        remove_word = {label:[] for label in range(self.class_label)}
+        for label in range(self.class_label):
+            for word in self.lexicon[label]:
+                if word not in new_lexicon[label]:
+                    remove_word[label].append(word)
+        
+        for label in range(self.class_label):
+            for word in remove_word[label]:
+                if word in self.lexicon[label]:
+                    self.lexicon[label].remove(word)
+        
+        # top k lexicon validate (remove intersection, prefix word thta starts '#' letter)
+        top_k_lexicon = self.filter_lexicon(top_k_lexicon)
+        print('FILTERED TOP_K_LEXICON')
+        print(top_k_lexicon)
+        print()
+        for label in range(self.class_label):
+            self.lexicon[label].extend(top_k_lexicon[label])
+        
+        print('ADD TOP_K_LEXIOCN INTO EXISTING LEXICON')
+        print(self.lexicon)
+        
+        print('AUGMENT LEXICON')
+        self.augment_lexicon()
+        
+        
             

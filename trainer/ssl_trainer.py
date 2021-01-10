@@ -1,7 +1,7 @@
 import torch
 import os
 from util.early_stopping import EarlyStopping
-from util.checkpoint import save_model, get_best_checkpoint, load_trained_model, save_lexicon
+from util.checkpoint import save_model, get_best_checkpoint, load_trained_model, save_lexicon, load_lexicon
 from transformers import BertTokenizer
 from model.bert_classification import BERT_Classification
 from torch.utils.data import Dataset, DataLoader
@@ -135,6 +135,7 @@ class SSL_Trainer(object):
     def train(self, labeled_data=None, unlabeled_data=None,
               dev_data=None, test_data=None, outer_epoch=20, inner_epoch=20):
         outer_early_stopping = EarlyStopping(patience=5, verbose=True)
+        # Todo: outer_early_stopping 조건 설정
         valid_loader = DataLoader(dev_data, **self.config.valid_params)
 
         ## Outer Loop
@@ -199,8 +200,6 @@ class SSL_Trainer(object):
                 nb_tr_steps = 0
                 model.train()
                 
-                # 매 에폭마다 렉시콘을 생성하고, 렉시콘 파일 이름은 outer_epoch으로 구분
-                # 렉시콘 저장은 dev_loss가 가장 낮을 때, lexicon을 저장함 
                 lexicon = {label:{} for label in range(self.config.class_num)}
                 for _, batch in enumerate(train_loader):
                     # forward batch                     
@@ -214,7 +213,9 @@ class SSL_Trainer(object):
                     lexicon = self.extract_lexicon(attn, ids, targets, lexicon)
                     
                     # get loss1 
-                    # gen_perturbed_batch(batch, class_label=2) # class가 binary일 떄는 antonym. else oversampling based on synonym
+                    # Todo: gen_perturbed_batch(batch, class_label=2) 
+                    # class가 binary일 떄는 antonym. else oversampling based on synonym
+                    
                     loss = loss1 # + loss2 from perturbed samples
                     tr_loss += loss.item()
                     nb_tr_steps += 1
@@ -249,13 +250,12 @@ class SSL_Trainer(object):
                             lexicon[label] = dict(sorted(lexicon[label].items(), key=lambda x:x[1], reverse=True))
                             
                         save_lexicon(lexicon=lexicon, epoch=o_epoch+1, path=self.ssl_expt_dir)
-                        
-            #self.lexicon_instance.lexicon_update()
-            #self.lexicon_instance.augment_lexicon()
                 if inner_early_stopping.early_stop:
                     print('EARLY STOPPING!')
                     break
-                
+                    
+            lexicon = load_lexicon(self.ssl_expt_dir + '/lexicon_{}.pkl'.format(o_epoch+1))
+            self.lexicon_instance.lexicon_update(lexicon)
             del model, optimizer
             print()
             

@@ -41,3 +41,9 @@ def save_lexicon(lexicon=None, epoch=None, path=None):
     save_path = path +'/lexicon_{}.pkl'.format(epoch)
     with open(save_path, 'wb') as fw:
         pickle.dump(lexicon, fw, pickle.HIGHEST_PROTOCOL)
+
+        
+def load_lexicon(path):
+    with open(path, 'rb') as rf:
+        lexicon = pickle.load(rf)
+    return lexicon
