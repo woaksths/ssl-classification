@@ -4,28 +4,17 @@ from util.early_stopping import EarlyStopping
 from util.checkpoint import save_model, get_best_checkpoint, load_trained_model, save_lexicon, load_lexicon
 from transformers import BertTokenizer
 from model.bert_classification import BERT_Classification
+from model.bert_bilstm_classification import BERT_LSTM_Classification
 from torch.utils.data import Dataset, DataLoader
 from torch import cuda
 import torch.nn as nn 
 import copy
+import torch.nn.functional as F
 from lexicon_util.lexicon_config import *
 
+
 class SSL_Trainer(object):
-    
-    '''
-    TO DO
-    1. PSEUDO-LABELING 
-    2. UPDATE DATASET (1. add labeled data into train data 2. remove labeled data from unlabeled data)
-    3. MAKE PERTURBED SAMPLES from labeled data
-
-    4. TRAIN MODULE 
-    5. EXTRACT lexicon FROM UNSEEN TRAIN DATA usning ATTENTION
-    6. UPDATE LEXICON (1. remove some word  2. add some word)
-
-    7. DEV EVAL (if possible test eval)
-    8. SAVING & LOAD MODULE
-    '''
-    
+        
     def __init__(self, expt_dir=None, criterion= nn.CrossEntropyLoss(), lexicon_instance=None, config=None):
         self.expt_dir = expt_dir
         self.ssl_expt_dir = expt_dir +'/SSL'
@@ -62,6 +51,44 @@ class SSL_Trainer(object):
             
         return training_dataset
 
+    
+    
+    def balance_dataset(self, new_labeled_dataset):
+        label_stats = {label: 0 for label in range(self.config.class_num)}
+        for idx, label_data in enumerate(new_labeled_dataset):
+            encodings = label_data[0]
+            labels = label_data[1]
+            for label_idx in labels:
+                label_stats[label_idx] +=1
+        min_val = 987654321
+        
+        for label, cnt in label_stats.items():
+            if min_val > cnt:
+                min_val = cnt
+                
+        dataset_size = {label: 0 for label in range(self.config.class_num)}
+        balanced_encodings = {'input_ids':[], 'attention_mask':[], 'token_type_ids':[]}
+        balanced_labels = []
+
+        for i, label_data in enumerate(new_labeled_dataset):
+            encodings = label_data[0]
+            labels = label_data[1]
+            
+            for j, label in enumerate(labels):
+                if dataset_size[label] < min_val :
+                    dataset_size[label] +=1
+                    balanced_encodings['input_ids'].append(encodings['input_ids'][j])
+                    balanced_encodings['attention_mask'].append(encodings['attention_mask'][j])
+                    balanced_encodings['token_type_ids'].append(encodings['token_type_ids'][j])
+                    balanced_labels.append(label)
+
+            if len(balanced_labels) *self.config.class_num == min_val:
+                break
+            
+        print('#INFO PSEUDO-LABEL STATS', label_stats)
+        print('#INFO NUM OF BALANCED DATASET ', len(balanced_labels))
+        return balanced_encodings, balanced_labels
+
         
     def pseudo_labeling(self, batch, model_preds, lexicon):
         decode_sents = []
@@ -88,6 +115,8 @@ class SSL_Trainer(object):
                 if max_cnt < cnt:
                     max_cnt = cnt
                     lexicon_pred = label
+            if max_cnt < 2: # 매칭 개수 늘리기
+                lexicon_pred = -1
             lexicon_preds.append(lexicon_pred)
         
         labeled_encodings = {'input_ids':[], 'token_type_ids':[], 'attention_mask':[]}
@@ -115,8 +144,8 @@ class SSL_Trainer(object):
         return (labeled_encodings, labeled_labels), (correct, total)
         
     
+    
     def extract_lexicon(self, attentions, input_ids, targets, lexicon):
-        # attn, ids, targets, lexicon
         values, indices = torch.topk(attentions, k=5, dim=-1)
         for input_var, indice, target in zip(input_ids, indices, targets):
             target = target.item()
@@ -132,12 +161,19 @@ class SSL_Trainer(object):
         return lexicon
     
     
+    
     def train(self, labeled_data=None, unlabeled_data=None,
               dev_data=None, test_data=None, outer_epoch=20, inner_epoch=20):
         outer_early_stopping = EarlyStopping(patience=5, verbose=True)
-        # Todo: outer_early_stopping 조건 설정
+        outer_lowest_dev_loss = 987654321
+        outer_best_dev_accuracy = -1 
+        
         valid_loader = DataLoader(dev_data, **self.config.valid_params)
-
+        test_loader = DataLoader(test_data, **self.config.test_params)
+        
+        # Todo: Outer loop 내로 shuffle하여서 batch를 뽑을지 
+        unlabeled_loader = DataLoader(unlabeled_data,  **self.config.unlabeled_params)
+        
         ## Outer Loop
         for o_epoch in range(outer_epoch):
             if outer_early_stopping.early_stop:
@@ -145,12 +181,14 @@ class SSL_Trainer(object):
                 print('END ...')
                 break
                 
+            expt_dir = self.expt_dir if o_epoch == 0 else self.ssl_expt_dir
+            
             # init model and load best model 
-            checkpoint = get_best_checkpoint(self.expt_dir, is_best_acc=False) # expt_dir -> ssl_expt_dir
+            checkpoint = get_best_checkpoint(expt_dir, is_best_acc=False)
             model, optimizer = load_trained_model(checkpoint, load=True)
             model.to(self.device)
             model.eval()
-            unlabeled_loader = DataLoader(unlabeled_data,  **self.config.unlabeled_params)
+            
             with torch.no_grad():
                 # both model and lexicon pred
                 consensus_total = 0 
@@ -158,7 +196,6 @@ class SSL_Trainer(object):
                 # using only model pred
                 model_total = 0
                 model_correct = 0
-                
                 new_labeled_dataset = []
                 
                 for _, batch in enumerate(unlabeled_loader):
@@ -168,8 +205,8 @@ class SSL_Trainer(object):
                     targets = batch['labels'].to(self.device, dtype=torch.long)
                     
                     outputs, attn = model(ids, attention_mask, token_type_ids)
-                    
-                    big_val, big_idx = torch.max(outputs.data, dim=1) # -> softmax
+                    # Todo: Softmax로 confidence 값 > 0.9 반영
+                    big_val, big_idx = torch.max(outputs.data, dim=1)
                     model_correct += (big_idx==targets).sum().item()
                     model_total += targets.size(0)
                     
@@ -178,20 +215,31 @@ class SSL_Trainer(object):
                     consensus_correct += correct
                     consensus_total += total
                     new_labeled_dataset.append(new_labeled_data)
-                    
+            
             print('#'*50, 'OUTER EPOCH {}'.format(o_epoch+1), '#'*50)
             print('INFO correct {} / total {} by only model predict'.format(model_correct, model_total))
             print('INFO consensus correct {} / consensus total {}'.format(consensus_correct, consensus_total))
             print('UPDATE DATASET')
-            train_dataset = self.update_dataset(new_labeled_dataset, labeled_data)
+            
+            # balance new labeled_dataset 
+            print(type(new_labeled_dataset), type(labeled_data))
+            new_labeled_dataset = self.balance_dataset(new_labeled_dataset)
+            train_dataset = self.update_dataset([new_labeled_dataset], labeled_data)
             print('LABELED DATA :',len(labeled_data))
             print('TRAINING DATA [AUGMENTED]: ', len(train_dataset))
-                        
+            
+            # Todo: Unlabeld data에 레이블링을 달 때, 사용했던 model과 optimization을 버리고, initialization (Overfitting 방지)
+            '''
+            del model, optimizer
+            model = BERT_LSTM_Classification(class_num=self.config.class_num)
+            model.to(self.config.device)
+            optimizer = torch.optim.Adam(params = model.parameters(), lr=self.config.learning_rate)    
+            '''
             # Inner Loop 
             train_loader = DataLoader(train_dataset, **self.config.train_params)
             inner_early_stopping = EarlyStopping(patience=5, verbose=True)
-            lowest_dev_loss = 987654321 
-            best_accuracy = -1
+            inner_lowest_dev_loss = 987654321 
+            inner_best_dev_accuracy = -1
             
             for i_epoch in range(inner_epoch):
                 tr_loss = 0
@@ -212,7 +260,6 @@ class SSL_Trainer(object):
                     loss1 = self.criterion(outputs, targets)
                     lexicon = self.extract_lexicon(attn, ids, targets, lexicon)
                     
-                    # get loss1 
                     # Todo: gen_perturbed_batch(batch, class_label=2) 
                     # class가 binary일 떄는 antonym. else oversampling based on synonym
                     
@@ -242,22 +289,45 @@ class SSL_Trainer(object):
                     print('Dev Loss ', dev_loss)
                     print('Dev Accuracy ', dev_acc)
                     inner_early_stopping(dev_loss)
-                    if lowest_dev_loss > dev_loss:
-                        lowest_dev_loss = dev_loss
+                    if inner_lowest_dev_loss > dev_loss:
+                        inner_lowest_dev_loss = dev_loss
                         save_model(model=model, optimizer=optimizer, epoch=o_epoch+1, path=self.ssl_expt_dir)
                         
                         for label in range(self.config.class_num):
                             lexicon[label] = dict(sorted(lexicon[label].items(), key=lambda x:x[1], reverse=True))
-                            
                         save_lexicon(lexicon=lexicon, epoch=o_epoch+1, path=self.ssl_expt_dir)
+                    
+                    if inner_best_dev_accuracy < dev_acc:
+                        inner_best_dev_accuracy = dev_acc
+                    
                 if inner_early_stopping.early_stop:
                     print('EARLY STOPPING!')
                     break
-                    
+            
             lexicon = load_lexicon(self.ssl_expt_dir + '/lexicon_{}.pkl'.format(o_epoch+1))
             self.lexicon_instance.lexicon_update(lexicon)
-            del model, optimizer
-            print()
+            outer_early_stopping(inner_lowest_dev_loss)
+            
+            if inner_lowest_dev_loss < outer_lowest_dev_loss:
+                del model, optimizer
+                checkpoint = torch.load(self.ssl_expt_dir+'/checkpoint_{}.pt'.format(o_epoch+1))
+                model, optimizer = load_trained_model(checkpoint, load=True)
+                save_model(model=model, optimizer=optimizer, epoch=o_epoch+1, path=self.ssl_expt_dir, val_loss_lowest=True)
+                outer_lowest_dev_loss = inner_lowest_dev_loss
+            
+            if outer_best_dev_accuracy < inner_best_dev_accuracy:
+                outer_best_dev_accuracy = inner_best_dev_accuracy
+                outer_early_stopping.counter = 0
+            
+            if o_epoch % 2 == 0:
+                if test_data is not None:
+                    with torch.no_grad():
+                        model.eval()
+                        test_loss, test_acc = self.evaluate(model, test_loader)
+                        print('Test Loss ', test_loss)
+                        print('Test Accuracy ', test_acc)
+                        
+            del model, optimizer            
             
          
     def calculate_accu(self, big_idx, targets):

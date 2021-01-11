@@ -28,7 +28,7 @@ test_texts, test_labels = read_imdb_split(args.test_path)
 
 # sample dataset
 labeled_data, unlabeled_data, dev_data = sample_dataset(dataset=(train_texts,train_labels), sampling_ratio= [0.5, 0.5],
-                                                        is_balanced=True, class_num=2, sampling_num=200)
+                                                        is_balanced=True, class_num=2, sampling_num=60)
 
 sampled_text, sampled_label = labeled_data[0], labeled_data[1]
 unlabeled_text, unlabeled_label = unlabeled_data[0], unlabeled_data[1]
@@ -49,21 +49,22 @@ tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
 train_encodings = tokenizer(sampled_text, truncation=True, padding=True)
 val_encodings = tokenizer(dev_text, truncation=True, padding=True)
-# test_encodings = tokenizer(test_texts, truncation=True, padding=True)
-# unlabeled_encodings = tokenizer(unlabeled_text, truncation=True, padding=True)
+test_encodings = tokenizer(test_texts, truncation=True, padding=True)
+unlabeled_encodings = tokenizer(unlabeled_text, truncation=True, padding=True)
 
 train_dataset = ImdbDataset(train_encodings, sampled_label)
+
 val_dataset = ImdbDataset(val_encodings, dev_label)
-# test_dataset = ImdbDataset(test_encodings, test_labels)
-# unlabeled_dataset = ImdbDataset(unlabeled_encodings, unlabeled_label)
+test_dataset = ImdbDataset(test_encodings, test_labels)
+unlabeled_dataset = ImdbDataset(unlabeled_encodings, unlabeled_label)
 
 # Load dataset
 train_loader = DataLoader(train_dataset, **config.train_params)
 valid_loader = DataLoader(val_dataset, **config.valid_params)
-# test_loader = DataLoader(test_dataset, **cofnig.test_params)
-# unlabeled_loader = DataLoader(unlabeled_dataset, **cofnig.unlabeled_params)
+test_loader = DataLoader(test_dataset, **config.test_params)
+unlabeled_loader = DataLoader(unlabeled_dataset, **config.unlabeled_params)
 
-'''
+
 # Build model & Criterion
 model = BERT_LSTM_Classification(class_num=2, vocab_size=None)
 
@@ -75,20 +76,21 @@ trainer = Trainer(config=config, model=model, criterion=loss_function, optimizer
                   train_loader=train_loader, valid_loader=valid_loader, test_loader=test_loader, save_path= args.save_path, tokenizer=tokenizer)
 trainer.train()
 del model, optimizer
-'''
+
 
 # Initialization model and optimizer
 model = BERT_LSTM_Classification(class_num=2, vocab_size=None)
 optimizer = torch.optim.Adam(params = model.parameters(), lr=config.learning_rate)
 
 # load checkpoint
-checkpoint = torch.load('experiment/lowest_val_loss.pt')
+checkpoint = torch.load('{}/lowest_val_loss.pt'.format(args.save_path))
 model.load_state_dict(checkpoint['model_state_dict'])
 optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 epoch = checkpoint['epoch']
 
 # get initial lexicon
-lexicon_instance = Lexicon(epoch=epoch)
+lexicon_instance = Lexicon(epoch=epoch, fname=args.save_path)
+print('INITIAL LEXICON')
 print(lexicon_instance.lexicon)
 lexicon_instance.augment_lexicon()
 
@@ -98,6 +100,5 @@ print(lexicon_instance.lexicon)
 ssl_trainer = SSL_Trainer(expt_dir=args.save_path, criterion=torch.nn.CrossEntropyLoss(),
                           lexicon_instance=lexicon_instance, config=config)
 
-ssl_trainer.train(labeled_data = train_dataset, unlabeled_data=train_dataset,
-                  dev_data=val_dataset, test_data = val_dataset, outer_epoch=20, inner_epoch=20)
-1/0
+ssl_trainer.train(labeled_data = train_dataset, unlabeled_data=unlabeled_dataset,
+                  dev_data=val_dataset, test_data = test_dataset, outer_epoch=20, inner_epoch=5)
