@@ -114,12 +114,10 @@ class Trainer:
         for epoch in range(self.config.epochs):
             self.train_epoch(epoch)
             self.evaluation(epoch)
-#             self.evaluation(is_test=True)
-#             if epoch % 3 == 0:
-#                 self.evaluation(epoch, is_test=True)
             print('*'*100)
             if self.early_stopping.early_stop:
                 print("EARLY STOP")
+                self.evaluation(epoch, is_test=True)
                 break
 
 
@@ -144,7 +142,7 @@ class Trainer:
                 loss = self.criterion(outputs, targets)
                 tr_loss += loss.item()
                 big_val, big_idx = torch.max(outputs.data, dim=1)
-                n_correct += self.calcuate_accu(big_idx, targets)
+                n_correct += self.calculate_accu(big_idx, targets)
                 nb_tr_steps += 1
                 nb_tr_examples+=targets.size(0)
                 
@@ -188,7 +186,3 @@ class Trainer:
             save_path = self.expt_dir +'/lowest_val_loss.pt'
             torch.save(checkpoint, save_path)
             
-        '''
-        ### 만약 model과 optimizer를 load하고 있지 않고 새롭게 initialization 하고 추가된 데이터로 새로 학습을 하면 어떻게 되지?
-        https://tutorials.pytorch.kr/beginner/saving_loading_models.html
-        '''

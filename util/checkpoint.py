@@ -6,11 +6,14 @@ import pickle
 from model.bert_bilstm_classification import BERT_LSTM_Classification
 import constant as config
 
-def save_model(model=None, optimizer=None, epoch=None, path=False):
+def save_model(model=None, optimizer=None, epoch=None, path=False, val_loss_lowest=False):
     print('SAVE MODEL')
     checkpoint = {'epoch': epoch, 'model_state_dict': model.state_dict(),
                   'optimizer_state_dict': optimizer.state_dict()}
-    save_path = path+ '/checkpoint_{}.pt'.format(epoch)
+    if val_loss_lowest == True:
+        save_path = path +'/lowest_val_loss.pt'
+    else:
+        save_path = path+ '/checkpoint_{}.pt'.format(epoch)
     torch.save(checkpoint, save_path)
     
 
