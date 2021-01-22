@@ -75,7 +75,7 @@ test_loader = DataLoader(test_dataset, **config.test_params)
 unlabeled_loader = DataLoader(unlabeled_dataset, **config.unlabeled_params)
 
 # Build model & Criterion
-model = BERT_LSTM_Classification(class_num=config.class_num, vocab_size=None, bidirectional=config.bidirectional)
+model = BERT_LSTM_Classification(class_num=config.class_num, bidirectional=config.bidirectional)
 
 loss_function = torch.nn.CrossEntropyLoss()
 # optimizer = torch.optim.Adam(params = model.parameters(), lr=config.learning_rate)
@@ -90,7 +90,7 @@ trainer.train()
 del model, optimizer
 
 # Initialization model and optimizer
-model = BERT_LSTM_Classification(class_num=config.class_num, vocab_size=None, bidirectional=config.bidirectional)
+model = BERT_LSTM_Classification(class_num=config.class_num, bidirectional=config.bidirectional)
 # optimizer = torch.optim.Adam(params = model.parameters(), lr=config.learning_rate)
 optimizer = AdamW(model.parameters(), lr=config.learning_rate, eps=1e-8)
 
