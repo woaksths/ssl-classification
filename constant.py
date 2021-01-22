@@ -5,8 +5,9 @@ epochs = 30
 train_batch_size = 16
 valid_batch_size = 16
 test_batch_size = 128
-unlabeled_batch_size = 128
-class_num = 2
+unlabeled_batch_size = 256
+class_num = 4
+bidirectional = False
 
 # Define hyperparameters
 train_params = {'batch_size': train_batch_size,

@@ -5,6 +5,7 @@ import pickle
 
 from model.bert_bilstm_classification import BERT_LSTM_Classification
 import constant as config
+from transformers import AdamW, get_linear_schedule_with_warmup
 
 def save_model(model=None, optimizer=None, epoch=None, path=False, val_loss_lowest=False):
     print('SAVE MODEL')
@@ -28,14 +29,13 @@ def get_best_checkpoint(expt_dir, is_best_acc=True):
 
 def load_trained_model(checkpoint, load=True):
     # initialize
-    model = BERT_LSTM_Classification(class_num=config.class_num)
+    model = BERT_LSTM_Classification(class_num=config.class_num, bidirectional=config.bidirectional)
     model.to(config.device)
-    optimizer = torch.optim.Adam(params = model.parameters(), lr=config.learning_rate)    
-    
+#     optimizer = torch.optim.Adam(params = model.parameters(), lr=config.learning_rate)    
+    optimizer = AdamW(model.parameters(), lr=config.learning_rate, eps=1e-8)
     if load is True:
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    
     return model, optimizer
 
 

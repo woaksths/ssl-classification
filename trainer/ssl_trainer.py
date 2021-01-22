@@ -33,7 +33,7 @@ class SSL_Trainer(object):
         if not os.path.exists(self.ssl_expt_dir):
             os.makedirs(self.ssl_expt_dir)
         
-        self.confidence_threshold = 0.9
+        self.confidence_threshold = 0.85
     
     
     
@@ -77,7 +77,8 @@ class SSL_Trainer(object):
         
         for (text, model_pred), target in zip(pseudo_labels, targets):
             lexicon_cnts = {label:0 for label in lexicon.keys()}
-            for word in text.split(' '):
+            split_tokens = self.tokenizer.tokenize(text)
+            for word in split_tokens: 
                 for label in lexicon.keys():
                     if word in lexicon[label]:
                         lexicon_cnts[label] += 1
@@ -93,7 +94,7 @@ class SSL_Trainer(object):
                     lexicon_pred = label
                     is_tie = False
             
-            if model_pred == lexicon_pred and is_tie == False:
+            if model_pred == lexicon_pred and is_tie == False and max_cnt >=2:
                 labeled_data['text'].append(text)
                 labeled_data['label'].append(model_pred)
                 total_cnt += 1
@@ -102,6 +103,7 @@ class SSL_Trainer(object):
                     match_cnt +=1
         return labeled_data, (match_cnt, total_cnt)
         
+    
     
     def balance_dataset(self, pseudo_labeled_dataset):
         texts = []
@@ -117,7 +119,8 @@ class SSL_Trainer(object):
         for label, value in data_num_per_label.items():
             if min_value > value:
                 min_value = value
-                
+        
+        print(data_num_per_label)
         data_num_per_label = {label:0 for label in range(self.config.class_num)}
         balanced_texts = []
         balanced_labels = []
@@ -235,15 +238,20 @@ class SSL_Trainer(object):
                 combined_dataset, filter_words = self.combine_dataset(pseudo_labeled_dataset, labeled_data)
             
             print('TRAINING DATA [AUGMENTED]: ', len(combined_dataset))
-            
+            '''
             # Teacher initialization 
             del model, optimizer
             model = BERT_LSTM_Classification(class_num=self.config.class_num, bidirectional=self.config.bidirectional)
             model.to(self.config.device)
             optimizer = torch.optim.Adam(params = model.parameters(), lr=self.config.learning_rate)
             
+            '''
+            
             # Inner Loop 
             train_loader = DataLoader(combined_dataset, **self.config.train_params)
+            total_steps= len(train_loader) * self.config.epochs
+            scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=0, num_training_steps=total_steps)
+
             inner_early_stopping = EarlyStopping(patience=5, verbose=True)
             inner_lowest_dev_loss = 987654321 
             inner_best_dev_accuracy = -1
@@ -279,8 +287,9 @@ class SSL_Trainer(object):
                     
                     optimizer.zero_grad()
                     loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                     optimizer.step()
-                    
+                    scheduler.step()
                     del loss, loss1, ids, attention_mask, token_type_ids, targets
                 
                 epoch_loss = tr_loss / nb_tr_steps
@@ -316,16 +325,19 @@ class SSL_Trainer(object):
             
             outer_early_stopping(inner_lowest_dev_loss)
             
+            
             if inner_lowest_dev_loss < outer_lowest_dev_loss:
                 del model, optimizer
                 checkpoint = torch.load(self.ssl_expt_dir+'/checkpoint_{}.pt'.format(o_epoch+1))
                 model, optimizer = load_trained_model(checkpoint, load=True)
                 save_model(model=model, optimizer=optimizer, epoch=o_epoch+1, path=self.ssl_expt_dir, val_loss_lowest=True)
                 outer_lowest_dev_loss = inner_lowest_dev_loss
-            
+
+                
             if outer_best_dev_accuracy < inner_best_dev_accuracy:
                 outer_best_dev_accuracy = inner_best_dev_accuracy
                 outer_early_stopping.counter = 0
+            
             
             if o_epoch % 1 == 0:
                 if test_data is not None:

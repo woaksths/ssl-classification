@@ -3,9 +3,11 @@ import os
 import pickle
 from lexicon_util.lexicon_config import *
 from util.early_stopping import EarlyStopping
+from augment import *
+
 
 class Trainer:
-    def __init__(self, config, model, criterion, optimizer,
+    def __init__(self, config, model, criterion, optimizer, scheduler,
                  train_loader, valid_loader, test_loader, save_path, tokenizer):
         
         self.config = config
@@ -27,10 +29,11 @@ class Trainer:
             os.makedirs(self.lexicon_dir)
         
         self.optimizer = optimizer
+        self.scheduler = scheduler
         self.device = self.config.device
         self.model.to(self.device)
         self.tokenizer = tokenizer
-        self.lexicon = {0:{}, 1:{}}
+        self.lexicon = {label:{} for label in range(self.config.class_num)}
         self.early_stopping = EarlyStopping(patience=5, verbose=True)
         self.best_accuracy = -1
         self.lowest_val_loss = 987654321
@@ -69,13 +72,13 @@ class Trainer:
         nb_tr_examples = 0
         self.model.train()
         train_loader = self.train_loader
-        for _, data in enumerate(train_loader):
-            ids = data['input_ids'].to(self.device, dtype=torch.long)
-            attention_mask = data['attention_mask'].to(self.device, dtype=torch.long)
-            token_type_ids = data['token_type_ids'].to(self.device, dtype=torch.long)
-            targets = data['labels'].to(self.device, dtype=torch.long)
-            outputs, attn = self.model(ids, attention_mask, token_type_ids)
+        for _, batch in enumerate(train_loader):
             
+            ids = batch['input_ids'].to(self.device, dtype=torch.long)
+            attention_mask = batch['attention_mask'].to(self.device, dtype=torch.long)
+            token_type_ids = batch['token_type_ids'].to(self.device, dtype=torch.long)
+            targets = batch['labels'].to(self.device, dtype=torch.long)
+            outputs, attn = self.model(ids, attention_mask, token_type_ids)
             self.extract_lexicon(attn, ids, targets)
             
             loss = self.criterion(outputs, targets)
@@ -83,7 +86,7 @@ class Trainer:
             big_val, big_idx = torch.max(outputs.data, dim=1)
             n_correct += self.calculate_accu(big_idx, targets)
             nb_tr_steps += 1
-            nb_tr_examples+=targets.size(0)
+            nb_tr_examples += targets.size(0)
             
             if _ % 1000 == 0:
                 loss_step = tr_loss/nb_tr_steps
@@ -93,20 +96,29 @@ class Trainer:
                 
             self.optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.optimizer.step()
+            self.scheduler.step()
+            
         epoch_loss = tr_loss/nb_tr_steps
         epoch_accu = (n_correct*100)/nb_tr_examples
         print(f"Training Loss Epoch: {epoch_loss}")
         print(f"Training Accuracy Epoch: {epoch_accu}")
         
         # 각 epoch에서 생성된 렉시콘 file write
+        
+        for label in range(self.config.class_num):
+            self.lexicon[label] = dict(sorted(self.lexicon[label].items(), key=lambda x:x[1], reverse=True))
+        '''    
         self.lexicon[1] = dict(sorted(self.lexicon[1].items(), key=lambda x:x[1], reverse=True))
         self.lexicon[0] = dict(sorted(self.lexicon[0].items(), key=lambda x:x[1], reverse=True))
+        '''
         fname = self.lexicon_dir + '/lexicon_{}.pkl'.format(epoch)
         self.write_lexicon(fname, self.lexicon)
         
         # 렉시콘 초기화 
-        self.lexicon = {0:{}, 1:{}}
+        #self.lexicon = {0:{}, 1:{}}
+        self.lexicon = {label:{} for label in range(self.config.class_num)}
 
     
     
@@ -115,9 +127,12 @@ class Trainer:
             self.train_epoch(epoch)
             self.evaluation(epoch)
             print('*'*100)
+            self.evaluation(epoch, is_test=True)
+                
+            
             if self.early_stopping.early_stop:
                 print("EARLY STOP")
-                self.evaluation(epoch, is_test=True)
+#                 self.evaluation(epoch, is_test=True)
                 break
 
 
