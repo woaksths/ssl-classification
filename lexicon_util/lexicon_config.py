@@ -33,7 +33,7 @@ STOP_WORDS = ['i', 'me', 'my', 'myself', 'we', 'our',
 			'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 
 			'very', 's', 't', 'can', 'will', 'just', 'don', 'one','two', 'three', 'four', 'first',
 			'should', 'now', '>', 'br', '<', 'still', 'even', 'bit', 'people'
-              ,'wednesday', 'yesterday', 'monday','friday', 'sunday', 'tuesday', 'thursday', 'saturday', '[SEP]']
+              ,'wednesday', 'yesterday', 'monday','friday', 'sunday', 'tuesday', 'thursday', 'saturday', '[SEP]' ,'[UNK]']
 
 FILTER_WORDS= ['is','was','were','have', 'do', 'are', 'get', 'make', 'got', 'has', 'had','made', 'got', 'i', 'people']
 
