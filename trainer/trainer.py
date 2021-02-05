@@ -4,7 +4,7 @@ import pickle
 from lexicon_util.lexicon_config import *
 from util.early_stopping import EarlyStopping
 from augment import *
-
+from util.checkpoint import *
 
 class Trainer:
     def __init__(self, config, model, criterion, optimizer, scheduler,
@@ -46,24 +46,28 @@ class Trainer:
     
     def extract_lexicon(self, attentions, input_ids, targets):
         values, indices = torch.topk(attentions, k=5, dim=-1)
-        for input_var, indice, target in zip(input_ids, indices, targets):
+        for input_var, attn_vals, indice, target in zip(input_ids, values, indices, targets):
             target = target.item()
-            for idx in indice:
+            for idx, attn in zip(indice, attn_vals):
                 vocab_id = input_var[idx.item()].item()
-                word= self.tokenizer._convert_id_to_token(vocab_id)
+                word = self.tokenizer._convert_id_to_token(vocab_id)
+
                 if word in STOP_WORDS or word in END_WORDS or word in CONTRAST or word in NEGATOR:
                     continue
                 if word in self.lexicon[target]:
-                    self.lexicon[target][word] += 1
+                    self.lexicon[target][word]['count'] +=1 # accumulated_sum
+                    self.lexicon[target][word]['attn_sum'] += attn.item() # accumulated attention sum
                 else:
-                    self.lexicon[target][word] = 1
-                
-    
+                    self.lexicon[target][word] = {}
+                    self.lexicon[target][word]['count'] = 1
+                    self.lexicon[target][word]['attn_sum'] = attn.item()
+
+            
     def write_lexicon(self, fname, lexicon):
         with open(fname, 'wb') as fw:
             pickle.dump(lexicon, fw, pickle.HIGHEST_PROTOCOL)
 
-
+            
     def train_epoch(self, epoch):
         print('#'*50, 'EPOCH {}'.format(epoch),'#'*50)
         tr_loss = 0
@@ -96,39 +100,30 @@ class Trainer:
                 
             self.optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+#             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.optimizer.step()
-            self.scheduler.step()
+#             self.scheduler.step()
             
         epoch_loss = tr_loss/nb_tr_steps
         epoch_accu = (n_correct*100)/nb_tr_examples
         print(f"Training Loss Epoch: {epoch_loss}")
         print(f"Training Accuracy Epoch: {epoch_accu}")
         
-        # 각 epoch에서 생성된 렉시콘 file write
-        
-        for label in range(self.config.class_num):
-            self.lexicon[label] = dict(sorted(self.lexicon[label].items(), key=lambda x:x[1], reverse=True))
-        '''    
-        self.lexicon[1] = dict(sorted(self.lexicon[1].items(), key=lambda x:x[1], reverse=True))
-        self.lexicon[0] = dict(sorted(self.lexicon[0].items(), key=lambda x:x[1], reverse=True))
-        '''
         fname = self.lexicon_dir + '/lexicon_{}.pkl'.format(epoch)
         self.write_lexicon(fname, self.lexicon)
         
         # 렉시콘 초기화 
-        #self.lexicon = {0:{}, 1:{}}
         self.lexicon = {label:{} for label in range(self.config.class_num)}
 
-    
     
     def train(self, do_eval=True):
         for epoch in range(self.config.epochs):
             self.train_epoch(epoch)
             self.evaluation(epoch)
             print('*'*100)
-            self.evaluation(epoch, is_test=True)
-                
+            
+            if epoch % 2 == 0:
+                self.evaluation(epoch, is_test=True)
             
             if self.early_stopping.early_stop:
                 print("EARLY STOP")
@@ -184,20 +179,10 @@ class Trainer:
             
             if self.best_accuracy < epoch_accu:
                 self.best_accuracy = epoch_accu
-                self.save_model(epoch)
+                save_model(model=self.model, optimizer=self.optimizer, epoch=epoch, path=self.expt_dir, is_best_checkpoint=True)
+            else:
+                save_model(model=self.model, optimizer=self.optimizer, epoch=epoch, path=self.expt_dir)
 
             if self.lowest_val_loss > epoch_loss:
                 self.lowest_val_loss = epoch_loss
-                self.save_model(epoch, val_loss_lowest=True)
-
-
-    def save_model(self, epoch, val_loss_lowest=False):
-        checkpoint = {'epoch':epoch, 'model_state_dict': self.model.state_dict(),
-                      'optimizer_state_dict': self.optimizer.state_dict()}
-        save_path = self.expt_dir+'/checkpoint_{}.pt'.format(epoch)
-        torch.save(checkpoint, save_path)
-        
-        if val_loss_lowest:
-            save_path = self.expt_dir +'/lowest_val_loss.pt'
-            torch.save(checkpoint, save_path)
-            
+                save_model(model=self.model, optimizer=self.optimizer, epoch=epoch, path=self.expt_dir, is_best_checkpoint=True)
